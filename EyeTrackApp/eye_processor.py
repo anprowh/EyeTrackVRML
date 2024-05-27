@@ -18,13 +18,15 @@
                                    @@@  @          @@@@@@@@#                                        
                                        @@@@@@@@@@@@@@@@@                                            
                                       @@@@@@@@@@@@@(     
-                                      
-Algorithm App Implementations By: Prohurtz, qdot (GUI, Initial Implementations), PallasNeko (Optimizations), Summer (Algorithim Engineer)
+
+HSR By: PallasNeko (Optimization Wizard, Contributor), Summer#2406 (Main Algorithm Engineer)  
+RANSAC 3D By: Summer#2406 (Main Algorithm Engineer), Pupil Labs (pye3d), PallasNeko (Optimization)
+BLOB By: Prohurtz (Main App Developer)
+Algorithm App Implementations By: Prohurtz, qdot (Initial App Creator), PallasNeko
 
 Additional Contributors: [Assassin], Summer404NotFound, lorow, ZanzyTHEbar
 
 Copyright (c) 2023 EyeTrackVR <3
-LICENSE: GNU GPLv3
 ------------------------------------------------------------------------------------------------------
 """
 
@@ -33,6 +35,8 @@ from dataclasses import dataclass
 import sys
 import asyncio
 import os
+from tqdm import tqdm
+import keyboard as kb
 
 os.environ["OMP_NUM_THREADS"] = "1"
 sys.path.append(".")
@@ -60,6 +64,8 @@ from utils.img_utils import circle_crop
 from eye import EyeInfo, EyeInfoOrigin
 from intensity_based_openness import *
 from ellipse_based_pupil_dilation import *
+from random_line import *
+from svae import svae
 from AHSF import *
 
 
@@ -78,6 +84,28 @@ async def delayed_setting_change(setting, value):
     await asyncio.sleep(5)
     setting = value
     PlaySound(resource_path("Audio/completed.wav"), SND_FILENAME | SND_ASYNC)
+    
+def csv_to_dict(csv_file) -> dict:
+    data = {}
+    
+    with open(csv_file, 'r') as file:
+        reader = csv.reader(file, delimiter=',')
+        
+        # Populate the dictionary with the data
+        for row in reader:
+            if len(row) != 3:
+                continue
+            data[row[0]] = row[1], row[2]
+    
+    return data
+    
+def get_dataset():
+    coords_dict = csv_to_dict(r"C:\Users\anpro\dataset\EyeTracking\test.csv")
+    image_files, coords = zip(*coords_dict.items())
+    coords = np.array(tuple((float(x[0]), float(x[1])) for x in coords), dtype=np.float32)
+    yield len(image_files)
+    for image_file, coord in zip(image_files, coords):
+        yield cv2.resize(cv2.imread(image_file), (250, 250)), coord
 
 
 class EyeProcessor:
@@ -173,6 +201,18 @@ class EyeProcessor:
         self.pupil_height = 0.0
         self.avg_velocity = 0.0
         self.angle = 621
+        
+        self.evaluation = True
+        self.dataset_image_generator = get_dataset()
+        self.dataset_length = next(self.dataset_image_generator)
+        self.loss = 0.0
+        self.avg_loss = 0.0
+        self.loss_n = 0
+        self.tqdm_obj = tqdm(range(self.dataset_length))
+        self.tqdm = iter(self.tqdm_obj)
+        self.expected = (0,0)
+        
+        
 
         try:
             min_cutoff = float(self.settings.gui_min_cutoff)  # 0.0004
@@ -576,9 +616,55 @@ class EyeProcessor:
         else:
             pass
         self.rawx, self.rawy, self.thresh = BLOB(self)
+        # print(f'Raw coords: {self.rawx}, {self.rawy}')
 
-        self.out_x, self.out_y = cal.cal_osc(self, self.rawx, self.rawy, self.angle)
+        self.out_x, self.out_y = cal.cal_osc(self, self.rawx, self.rawy, self.angle)[:2]
+        # print(f'Out coords: {self.out_x}, {self.out_y}')
         self.current_algorithm = EyeInfoOrigin.BLOB
+        
+    def random_lineM(self):
+        if self.eye_id in [EyeId.LEFT] and self.settings.gui_circular_crop_left:
+            self.current_image_gray, self.cct = circle_crop(
+                self.current_image_gray, self.xc, self.yc, self.cc_radius, self.cct
+            )
+        else:
+            pass
+        if self.eye_id in [EyeId.RIGHT] and self.settings.gui_circular_crop_right:
+            self.current_image_gray, self.cct = circle_crop(
+                self.current_image_gray, self.xc, self.yc, self.cc_radius, self.cct
+            )
+        else:
+            pass
+        
+        self.rawx, self.rawy = random_line(self)
+        self.thresh = self.current_image_gray
+
+        self.out_x, self.out_y, self.avg_velocity = cal.cal_osc(self, self.rawx, self.rawy, self.angle)
+        self.out_x, self.out_y = self.rawx, self.rawy
+        
+        self.current_algorithm = EyeInfoOrigin.RANDOM
+        
+    def SVAEM(self):
+        if self.eye_id in [EyeId.LEFT] and self.settings.gui_circular_crop_left:
+            self.current_image_gray, self.cct = circle_crop(
+                self.current_image_gray, self.xc, self.yc, self.cc_radius, self.cct
+            )
+        else:
+            pass
+        if self.eye_id in [EyeId.RIGHT] and self.settings.gui_circular_crop_right:
+            self.current_image_gray, self.cct = circle_crop(
+                self.current_image_gray, self.xc, self.yc, self.cc_radius, self.cct
+            )
+        else:
+            pass
+        
+        self.rawx, self.rawy = svae(self)
+        self.thresh = self.current_image_gray
+
+        self.out_x, self.out_y, self.avg_velocity = cal.cal_osc(self, self.rawx, self.rawy, self.angle)
+        self.out_x, self.out_y = self.rawx, self.rawy
+        
+        self.current_algorithm = EyeInfoOrigin.SVAE
 
     def ALGOSELECT(self):
         # send the tracking algos previous fail number, in algo if we pass set to 0, if fail, + 1
@@ -613,6 +699,14 @@ class EyeProcessor:
         if self.failed == 7 and self.eigthalgo != None:
             self.eigthalgo()
         else:
+            self.failed = self.failed + 1
+        if self.failed == 8 and self.ninthalgo != None:
+            self.ninthalgo()
+        else:
+            self.failed = self.failed + 1
+        if self.failed == 9 and self.tenthalgo != None:
+            self.tenthalgo()
+        else:
             self.failed = 0  # we have reached last possible algo and it is disabled, move to first algo
 
     def run(self):
@@ -627,7 +721,9 @@ class EyeProcessor:
         self.sixthalgo = None
         self.seventhalgo = None
         self.eigthalgo = None
-        algolist = [None, None, None, None, None, None, None, None, None]
+        self.ninthalgo = None
+        self.tenthalgo = None
+        algolist = [None, None, None, None, None, None, None, None, None, None, None]
 
         # clear HSF values when page is opened to correctly reflect setting changes
         self.er_hsf = None
@@ -709,6 +805,12 @@ class EyeProcessor:
 
         if self.settings.gui_BLOB:
             algolist[self.settings.gui_BLOBP] = self.BLOBM
+            
+        if self.settings.gui_RANDOM:
+            algolist[self.settings.gui_RANDOMP] = self.random_lineM
+            
+        if self.settings.gui_SVAE:
+            algolist[self.settings.gui_SVAEP] = self.SVAEM
 
         (
             _,
@@ -720,6 +822,8 @@ class EyeProcessor:
             self.sixthalgo,
             self.seventhalgo,
             self.eigthalgo,
+            self.ninthalgo,
+            self.tenthalgo
         ) = algolist
 
         f = True
@@ -759,21 +863,43 @@ class EyeProcessor:
                 if self.capture_queue_incoming.empty():
                     self.capture_event.set()
                 # Wait a bit for images here. If we don't get one, just try again.
-                (
-                    self.current_image,
-                    self.current_frame_number,
-                    self.current_fps,
-                ) = self.capture_queue_incoming.get(block=True, timeout=0.1)
+                if not self.evaluation:
+                    (
+                        self.current_image,
+                        self.current_frame_number,
+                        self.current_fps,
+                    ) = self.capture_queue_incoming.get(block=True, timeout=0.1)
             except queue.Empty:
                 #print("No image available")
                 continue
-
+            
+            finished = False
+            if self.evaluation:
+                try:
+                    self.current_image, coord = next(self.dataset_image_generator)
+                except StopIteration as e:
+                    finished = True
+                    pass
+                self.current_image_gray = self.current_image[:,:,0]
+                if kb.is_pressed('-'):
+                    
+                    self.dataset_image_generator = get_dataset()
+                    self.dataset_length = next(self.dataset_image_generator)
+                    self.loss_n = 0
+                    self.loss = 0.0
+                    self.avg_loss = 0.0
+                    self.tqdm_obj = tqdm(range(self.dataset_length))
+                    self.tqdm = iter(self.tqdm_obj)
+                    
+            # if not self.evaluation:
             if not self.capture_crop_rotate_image():
                 continue
 
             self.current_image_gray = cv2.cvtColor(
                 self.current_image, cv2.COLOR_BGR2GRAY
             )
+            # else:
+                
             self.current_image_gray_clean = (
                 self.current_image_gray.copy()
             )  # copy this frame to have a clean image for blink algo
@@ -785,3 +911,21 @@ class EyeProcessor:
             else:
                 self.ALGOSELECT()  # run our algos in priority order set in settings
                 self.UPDATE()
+                if self.evaluation and not finished:
+                    self.expected = coord
+                    if -0.8 < self.out_x < 0.8 and -0.9 < self.out_y < 0.7:
+                        self.loss += (self.out_x - coord[0]) ** 2 + (self.out_y - coord[1]) ** 2
+                        self.loss_n += 1
+                        current_iter = next(self.tqdm)
+                        self.avg_loss = self.loss / self.loss_n
+                        self.tqdm_obj.set_postfix(avg_loss=self.avg_loss)
+                 
+                
+    
+    def draw_expected(self):
+        self.graph.draw_circle(
+            (self.expected[0] * -100, self.expected[1] * -100),
+            10,
+            fill_color="red",
+            line_color="white",
+        )

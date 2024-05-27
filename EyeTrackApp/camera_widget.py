@@ -465,11 +465,14 @@ class CameraWidget:
 
                 if eye_info.info_type != EyeInfoOrigin.FAILURE:  # and not eye_info.blink:
                     graph.update(background_color="white")
+                    if self.ransac.evaluation:
+                        self.ransac.graph = graph
+                        self.ransac.draw_expected()
                     if not np.isnan(eye_info.x) and not np.isnan(eye_info.y):
-
+                        # print("Eye", eye_info.x, eye_info.y)
                         graph.draw_circle(
                             (eye_info.x * -100, eye_info.y * -100),
-                            eye_info.pupil_dilation * 25,
+                            10 if not eye_info.pupil_dilation else eye_info.pupil_dilation * 25,
                             fill_color="black",
                             line_color="white",
                         )

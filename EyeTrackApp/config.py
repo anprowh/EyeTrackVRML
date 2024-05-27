@@ -67,6 +67,8 @@ class EyeTrackSettingsConfig(BaseModel):
     gui_AHSF: bool = False
     gui_DADDY: bool = False
     gui_LEAP: bool = False
+    gui_RANDOM: bool = False
+    gui_SVAE: bool = False
     gui_HSF_radius: int = 15
     gui_HSF_radius_left: int = 10
     gui_HSF_radius_right: int = 10
@@ -90,6 +92,8 @@ class EyeTrackSettingsConfig(BaseModel):
     gui_RANSAC3DP: int = 6
     gui_BLOBP: int = 7
     gui_LEAPP: int = 8
+    gui_RANDOMP: int = 9
+    gui_SVAEP: int = 10
     gui_IBO: bool = True
     gui_skip_autoradius: bool = False
     gui_thresh_add: int = 11
@@ -121,7 +125,7 @@ class EyeTrackSettingsConfig(BaseModel):
     gui_osc_vrcft_v1: bool = False
     gui_osc_vrcft_v2: bool = False
     gui_vrc_native: bool = True
-    gui_pupil_dilation: bool = True
+    gui_pupil_dilation: bool = False
 
 
 class EyeTrackConfig(BaseModel):
